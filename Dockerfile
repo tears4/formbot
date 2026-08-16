@@ -3,10 +3,9 @@
 
 FROM mcr.microsoft.com/playwright:v1.49.0-jammy
 
-# Use Node already present in the Playwright image
 WORKDIR /app
 
-# Install only production deps first (better layer caching)
+# Install production dependencies
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev
 
@@ -16,17 +15,21 @@ COPY config ./config
 COPY input ./input
 COPY src ./src
 
-# Ensure results directory exists (will be written at runtime)
-RUN mkdir -p results
+# Create writable results directory owned by pwuser (non-root)
+# Also prepare /tmp/results as a fallback for restricted filesystems
+RUN mkdir -p /app/results /tmp/results \
+    && chown -R pwuser:pwuser /app /tmp/results \
+    && chmod -R u+rwX /app/results /tmp/results
 
 # Environment defaults
 ENV NODE_ENV=production
 ENV HEADLESS=true
 ENV LOG_LEVEL=info
+ENV RESULTS_DIR=/app/results
+ENV LOOP_ENABLED=true
+ENV LOOP_DELAY_MS=600000
 
 # Playwright browsers are pre-installed in the base image
-# Running as non-root is recommended; the playwright image includes pwuser
 USER pwuser
 
-# Default command
 CMD ["node", "bot.js"]
