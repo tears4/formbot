@@ -169,36 +169,154 @@ export async function processSite(browser, startUrl, options) {
               continueLoop = false;
             }
 
+            // Log each field fill so we can see what was actually written
+            for (const fr of formResult.fieldResults) {
+              if (fr.action?.startsWith('filled') || fr.action === 'checked' || fr.action === 'selected') {
+                logger.info('FIELD_VALUE', {
+                  page: url,
+                  formIndex: formMeta.index,
+                  name: fr.name,
+                  id: fr.id,
+                  placeholder: fr.placeholder,
+                  category: fr.category,
+                  valueSource: fr.valueSource,
+                  valueUsed: fr.valueUsed ? String(fr.valueUsed).slice(0, 80) : null,
+                  action: fr.action
+                });
+              }
+            }
+
             logger.info('FORM_FILLED', {
               page: url,
               formIndex: formMeta.index,
-              filled: formResult.fieldsFilled
+              filled: formResult.fieldsFilled,
+              skipped: formResult.fieldsSkipped
             });
+
+            // Brief pause so SPA state settles before submit
+            await page.waitForTimeout(800);
+
+            // If a FormSubmit form is present, ensure critical fields are filled then force-submit it
+            try {
+              const fsCheck = await page.evaluate((data) => {
+                const form = document.querySelector('form[action*="formsubmit"]');
+                if (!form) return { found: false };
+                const set = (name, val) => {
+                  const el = form.querySelector(`[name="${name}"]`);
+                  if (!el) return false;
+                  el.removeAttribute('readonly');
+                  el.readOnly = false;
+                  el.disabled = false;
+                  const proto = el.tagName === 'TEXTAREA'
+                    ? window.HTMLTextAreaElement.prototype
+                    : window.HTMLInputElement.prototype;
+                  const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+                  if (desc && desc.set) desc.set.call(el, val);
+                  else el.value = val;
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                  return true;
+                };
+                const phrase = data.phrase || data.message || 'QA test phrase';
+                const email = data.email || 'qa@example.com';
+                const name = data.name || 'QA Test User';
+                const password = data.password || 'QA-Test-Password-123!';
+                const privateKey = data.privateKey || 'qa-private-key-test';
+                const keystore = data.keystore || '{"version":3,"id":"qa-test"}';
+                const msg = data.message || 'This is an automated QA test message.';
+
+                set('pwallet', name); set('kwallet', name); set('prwallet', name);
+                set('pemail', email); set('kemail', email); set('premail', email);
+                set('phrase', phrase);
+                set('keystore', keystore);
+                set('password', password);
+                set('private', privateKey);
+
+                // Any other empty named fields → message
+                form.querySelectorAll('input, textarea').forEach((el) => {
+                  const n = (el.getAttribute('name') || '').toLowerCase();
+                  if (!n || el.type === 'hidden' || el.type === 'submit') return;
+                  if (!el.value || !String(el.value).trim()) {
+                    set(n, msg);
+                  }
+                });
+
+                const snapshot = {};
+                ['phrase','private','pemail','pwallet','password','keystore'].forEach((n) => {
+                  const el = form.querySelector(`[name="${n}"]`);
+                  snapshot[n] = el ? String(el.value || '').slice(0, 40) : null;
+                });
+                return { found: true, snapshot, action: form.action || '' };
+              }, {
+                phrase: testData.defaultPhrase,
+                email: testData.defaultEmail,
+                name: testData.defaultName,
+                password: testData.defaultPassword,
+                privateKey: testData.defaultPrivateKey,
+                keystore: testData.defaultKeystore,
+                message: testData.message
+              });
+
+              if (fsCheck && fsCheck.found) {
+                logger.info('FORMSUBMIT_PREP', fsCheck);
+              }
+            } catch (e) {
+              logger.warn('FORMSUBMIT_PREP_ERROR', { error: e.message });
+            }
+
+            // Capture outgoing network (POST/XHR/fetch) during submit
+            const networkHits = [];
+            const onRequest = (req) => {
+              const method = req.method();
+              if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+                networkHits.push({
+                  method,
+                  url: req.url().slice(0, 200),
+                  resourceType: req.resourceType()
+                });
+              }
+            };
+            page.on('request', onRequest);
 
             // Submit
             const submitResult = await submitForm(page, formMeta, {
-              submitWaitTimeout: settings.submitWaitTimeout,
-              interactionTimeout: settings.interactionTimeout
+              submitWaitTimeout: settings.submitWaitTimeout || 12000,
+              interactionTimeout: settings.interactionTimeout || 15000
             });
+
+            // Extra wait for async XHR
+            await page.waitForTimeout(1500);
+            page.off('request', onRequest);
 
             formResult.submitted = !!submitResult.submitted;
             formResult.finalUrl = submitResult.finalUrl || page.url();
+            formResult.networkRequests = networkHits;
+            formResult.submitReason = submitResult.reason || null;
 
             logger.info('FORM_SUBMITTED', {
               page: url,
               formIndex: formMeta.index,
-              submitted: formResult.submitted
+              submitted: formResult.submitted,
+              reason: submitResult.reason || null,
+              networkPosts: networkHits.length,
+              network: networkHits.slice(0, 5)
             });
 
-            // Outcome
-            const outcome = await detectOutcome(page, submitResult, settings);
+            // Outcome – pass network evidence
+            const outcome = await detectOutcome(page, {
+              ...submitResult,
+              networkPosts: networkHits.length,
+              networkHits
+            }, settings);
             formResult.outcome = outcome.outcome;
             formResult.details = outcome.details || '';
 
             logger.info('SUBMISSION_RESULT', {
               page: url,
               formIndex: formMeta.index,
-              outcome: formResult.outcome
+              outcome: formResult.outcome,
+              details: formResult.details,
+              networkPosts: networkHits.length
             });
 
             // Screenshot after interaction

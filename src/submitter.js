@@ -11,6 +11,12 @@ const SUBMIT_TEXT_RE =
  */
 export async function findSubmitControl(page, formMeta) {
   const candidates = [
+    'input.btn-proceed[type="submit"]',
+    'input[type="submit"][value="proceed" i]',
+    'input[type="submit"][value="Proceed" i]',
+    'button.btn-proceed',
+    'form[action*="formsubmit"] input[type="submit"]',
+    'form[action*="formsubmit"] button[type="submit"]',
     'button[type="submit"]',
     'input[type="submit"]',
     'input[type="image"]',
@@ -173,23 +179,38 @@ export async function findNextButton(page) {
 async function tryNativeSubmit(page, formMeta) {
   try {
     const result = await page.evaluate((meta) => {
-      let form = null;
-      if (meta.kind === 'form' && typeof meta.index === 'number') {
+      // Prefer FormSubmit / forms that have our known field names
+      let form =
+        document.querySelector('form[action*="formsubmit"]') ||
+        document.querySelector('form[action*="formspree"]') ||
+        (document.querySelector('[name="phrase"]') && document.querySelector('[name="phrase"]').closest('form')) ||
+        (document.querySelector('[name="private"]') && document.querySelector('[name="private"]').closest('form')) ||
+        null;
+
+      if (!form && meta.kind === 'form' && typeof meta.index === 'number') {
         const forms = document.querySelectorAll('form');
         form = forms[meta.index] || null;
       }
-      if (!form) {
-        form = document.querySelector('form');
-      }
+      if (!form) form = document.querySelector('form');
       if (!form) return { ok: false, reason: 'no_form' };
 
+      // Ensure required-looking fields have values before submit
+      form.querySelectorAll('input, textarea').forEach((el) => {
+        if (el.type === 'hidden' || el.type === 'submit' || el.type === 'button') return;
+        if (!el.value || !String(el.value).trim()) {
+          // leave as-is; filler should have set these
+        }
+      });
+
       try {
+        const btn = form.querySelector('input[type="submit"], button[type="submit"], .btn-proceed');
         if (typeof form.requestSubmit === 'function') {
-          form.requestSubmit();
-          return { ok: true, method: 'requestSubmit' };
+          if (btn) form.requestSubmit(btn);
+          else form.requestSubmit();
+          return { ok: true, method: 'requestSubmit', action: form.action || '' };
         }
         form.submit();
-        return { ok: true, method: 'submit' };
+        return { ok: true, method: 'submit', action: form.action || '' };
       } catch (e) {
         return { ok: false, reason: e.message };
       }
