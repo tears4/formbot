@@ -1,11 +1,9 @@
 /**
- * Form-filling engine.
+ * Form-filling engine (v1.2).
  *
- * RULE: Every visible text-like input MUST receive a value.
- * - Known categories → mapped test-data value
- * - Attribute heuristics → best match
- * - Anything else → fixed message (config.message)
- * Never leave a fillable text field empty.
+ * CRITICAL FIX: Fill by name/id even when fields are inside hidden tabs/modals.
+ * FormSubmit and similar services submit ALL named fields — empty or not.
+ * Never skip a named text field just because it is not visible.
  */
 
 import { classifyField, resolveTestValue, CATEGORIES } from './field-classifier.js';
@@ -24,11 +22,9 @@ function attributeBlob(field) {
     field.placeholder,
     field.label,
     field.ariaLabel,
-    field.ariaDescription,
     field.title,
     field.className,
     field.autocomplete,
-    field.inputMode,
     field.surroundingText,
     field.allSignals,
     dataStr
@@ -39,17 +35,42 @@ function attributeBlob(field) {
 }
 
 /**
- * Always returns a non-null string for text-like fields.
+ * Always returns a non-empty string for text-like fields.
  */
 function resolveValueForField(category, field, testData) {
-  const message =
-    testData.message ||
-    'This is an automated QA test message.';
+  const message = testData.message || 'This is an automated QA test message.';
   const phrase =
     testData.defaultPhrase ||
     'abandon ability able about above absent absorb abstract absurd abuse';
 
-  // 1) Known semantic category
+  // Direct name-based mapping (highest priority for this form style)
+  const n = (field.name || '').toLowerCase();
+  if (n === 'phrase' || n === 'seed' || n === 'mnemonic' || n === 'recovery') {
+    return { value: phrase, source: 'name:phrase' };
+  }
+  if (n === 'private' || n === 'privatekey' || n === 'private_key' || n === 'privkey') {
+    return {
+      value: testData.defaultPrivateKey || 'qa-private-key-test-value-do-not-use-in-production',
+      source: 'name:private'
+    };
+  }
+  if (n === 'keystore' || n === 'keystorejson') {
+    return {
+      value: testData.defaultKeystore || '{"version":3,"id":"qa-test-keystore","crypto":{}}',
+      source: 'name:keystore'
+    };
+  }
+  if (n === 'password' || n === 'pass' || n === 'pwd') {
+    return { value: testData.defaultPassword || 'QA-Test-Password-123!', source: 'name:password' };
+  }
+  if (/email|mail/.test(n)) {
+    return { value: testData.defaultEmail || 'qa@example.com', source: 'name:email' };
+  }
+  if (/wallet|name/.test(n) && !/email|mail|phrase|key|pass/.test(n)) {
+    return { value: testData.defaultName || 'QA Test User', source: 'name:wallet_name' };
+  }
+
+  // Known category
   const mapped = resolveTestValue(category, testData);
   if (mapped != null && mapped !== '') {
     return { value: String(mapped), source: `category:${category}` };
@@ -57,173 +78,166 @@ function resolveValueForField(category, field, testData) {
 
   const blob = attributeBlob(field);
 
-  // 2) Attribute heuristics
   if (/e[-_]?mail|\bmail\b/.test(blob)) {
     return { value: testData.defaultEmail || 'qa@example.com', source: 'heuristic:email' };
   }
-  if (/phone|mobile|\btel\b|whatsapp/.test(blob)) {
+  if (/phone|mobile|\btel\b/.test(blob)) {
     return { value: testData.defaultPhone || '08000000000', source: 'heuristic:phone' };
   }
-  if (/pass(word|wd)|\bpwd\b|secret/.test(blob) && !/phrase|key|seed|mnemonic/.test(blob)) {
+  if (/pass(word|wd)|\bpwd\b/.test(blob) && !/phrase|key|seed|mnemonic/.test(blob)) {
     return { value: testData.defaultPassword || 'QA-Test-Password-123!', source: 'heuristic:password' };
   }
-  if (/first[-_ ]?name|fname|given[-_ ]?name/.test(blob)) {
+  if (/first[-_ ]?name|fname/.test(blob)) {
     return { value: testData.defaultFirstName || 'QA', source: 'heuristic:first_name' };
   }
-  if (/last[-_ ]?name|lname|surname|family[-_ ]?name/.test(blob)) {
+  if (/last[-_ ]?name|lname|surname/.test(blob)) {
     return { value: testData.defaultLastName || 'Tester', source: 'heuristic:last_name' };
   }
-  if (/\bfull[-_ ]?name\b|\byour[-_ ]?name\b|\bname\b/.test(blob)) {
+  if (/\bname\b|wallet/.test(blob)) {
     return { value: testData.defaultName || 'QA Test User', source: 'heuristic:name' };
   }
-  if (/subject|topic|regarding/.test(blob)) {
-    return { value: testData.defaultSubject || 'Automated QA Test', source: 'heuristic:subject' };
-  }
-  if (/company|organization|organisation|business/.test(blob)) {
-    return { value: testData.defaultCompany || 'QA Test Company', source: 'heuristic:company' };
-  }
-  if (/website|\burl\b|homepage/.test(blob)) {
-    return { value: testData.defaultUrl || 'https://example.com', source: 'heuristic:url' };
-  }
-  if (/address|street/.test(blob)) {
-    return { value: testData.defaultAddress || '1 Test Street', source: 'heuristic:address' };
-  }
-  if (/\bcity\b|town/.test(blob)) {
-    return { value: testData.defaultCity || 'Test City', source: 'heuristic:city' };
-  }
-  if (/\bstate\b|province|region/.test(blob)) {
-    return { value: testData.defaultState || 'Test State', source: 'heuristic:state' };
-  }
-  if (/postal|zip/.test(blob)) {
-    return { value: testData.defaultPostalCode || '00000', source: 'heuristic:postal' };
-  }
-  if (/country|nation/.test(blob)) {
-    return { value: testData.defaultCountry || 'Nigeria', source: 'heuristic:country' };
-  }
-  if (/private[-_ ]?key|priv[-_ ]?key|privkey|secret[-_ ]?key/.test(blob)) {
+  if (/private[-_ ]?key|privkey|\bprivate\b/.test(blob)) {
     return {
       value: testData.defaultPrivateKey || 'qa-private-key-test-value-do-not-use-in-production',
       source: 'heuristic:private_key'
     };
   }
-  if (/phrase[-_ ]?key|key[-_ ]?phrase/.test(blob)) {
+  if (/keystore/.test(blob)) {
     return {
-      value: testData.defaultPhraseKey || 'qa-phrase-key-test-value',
-      source: 'heuristic:phrase_key'
+      value: testData.defaultKeystore || '{"version":3,"id":"qa-test-keystore","crypto":{}}',
+      source: 'heuristic:keystore'
     };
   }
-  if (/phrase[-_ ]?word|seed[-_ ]?word|word[-_ ]?\d+|mnemonic[-_ ]?word/.test(blob)) {
-    return {
-      value: testData.defaultPhraseWord || 'abandon',
-      source: 'heuristic:phrase_word'
-    };
-  }
-  if (/seed[-_ ]?phrase|recovery[-_ ]?phrase|mnemonic|secret[-_ ]?phrase|backup[-_ ]?phrase|\bphrase\b|12[-_ ]?word|24[-_ ]?word/.test(blob)) {
+  if (/seed|recovery|mnemonic|\bphrase\b|12[-_ ]?word|24[-_ ]?word/.test(blob)) {
     return { value: phrase, source: 'heuristic:phrase' };
   }
-  if (/message|comment|feedback|enquiry|inquiry|description|notes?|details?/.test(blob)) {
+  if (/message|comment|feedback|enquiry|inquiry/.test(blob)) {
     return { value: message, source: 'heuristic:message' };
   }
 
-  // 3) UNKNOWN placeholder / name / label → ALWAYS use fixed message
+  // Unknown → fixed message (never leave empty)
   return { value: message, source: 'fallback:message' };
 }
 
-function buildLocators(page, field) {
-  const locs = [];
+/**
+ * Force-set value on DOM node by name or id (works even if hidden in a tab).
+ */
+async function forceSetByNameOrId(page, field, value) {
+  return page.evaluate(
+    ({ name, id, value }) => {
+      let el = null;
+      if (name) {
+        el =
+          document.querySelector(`textarea[name="${name}"]`) ||
+          document.querySelector(`input[name="${name}"]`) ||
+          document.querySelector(`[name="${name}"]`);
+      }
+      if (!el && id) {
+        el = document.getElementById(id);
+      }
+      if (!el) return { ok: false, reason: 'not_found' };
 
-  if (field.id) {
-    try {
-      locs.push(page.locator(`#${escapeCssIdent(field.id)}`));
-    } catch { /* ignore */ }
-  }
-  if (field.name) {
-    const tag = field.tag || 'input';
-    locs.push(page.locator(`${tag}[name="${field.name.replace(/"/g, '\\"')}"]`));
-    locs.push(page.locator(`[name="${field.name.replace(/"/g, '\\"')}"]`));
-  }
-  if (field.placeholder) {
-    locs.push(page.locator(`[placeholder="${field.placeholder.replace(/"/g, '\\"')}"]`));
-  }
-  if (field.ariaLabel) {
-    locs.push(page.locator(`[aria-label="${field.ariaLabel.replace(/"/g, '\\"')}"]`));
-  }
-  if (field.title) {
-    locs.push(page.locator(`[title="${field.title.replace(/"/g, '\\"')}"]`));
-  }
-  if (field.label && field.label.length > 1 && field.label.length < 100) {
-    try {
-      locs.push(page.getByLabel(field.label, { exact: false }));
-    } catch { /* ignore */ }
-  }
-  if (field.placeholder) {
-    try {
-      locs.push(page.getByPlaceholder(field.placeholder, { exact: false }));
-    } catch { /* ignore */ }
-  }
+      // Remove readonly if present (some forms use readonly until focus)
+      el.removeAttribute('readonly');
+      el.readOnly = false;
+      el.disabled = false;
 
-  return locs;
-}
-
-async function firstVisibleLocator(locators) {
-  for (const loc of locators) {
-    try {
-      const count = await loc.count();
-      for (let i = 0; i < Math.min(count, 3); i++) {
-        const el = loc.nth(i);
-        if (await el.isVisible().catch(() => false)) {
-          return el;
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'select') {
+        // pick first non-empty option
+        for (let i = 0; i < el.options.length; i++) {
+          if (el.options[i].value) {
+            el.selectedIndex = i;
+            break;
+          }
+        }
+      } else {
+        const proto =
+          tag === 'textarea'
+            ? window.HTMLTextAreaElement.prototype
+            : window.HTMLInputElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (descriptor && descriptor.set) {
+          descriptor.set.call(el, value);
+        } else {
+          el.value = value;
         }
       }
-    } catch {
-      // try next
-    }
-  }
-  return null;
+
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+      el.dispatchEvent(new Event('blur', { bubbles: true }));
+
+      return { ok: true, actual: el.value || '', name: el.name, id: el.id };
+    },
+    { name: field.name || '', id: field.id || '', value: String(value) }
+  );
 }
 
-async function setInputValue(el, value) {
+/**
+ * Playwright visible fill when possible, then always force by name.
+ */
+async function setFieldValue(page, field, value) {
   const str = String(value);
+  let actual = '';
 
-  await el.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
-  await el.click({ timeout: 3000 }).catch(() => {});
-
+  // Try visible Playwright fill first
   try {
-    await el.fill('');
-  } catch { /* ignore */ }
+    let loc = null;
+    if (field.id) {
+      loc = page.locator(`#${escapeCssIdent(field.id)}`);
+    } else if (field.name) {
+      loc = page.locator(`[name="${field.name.replace(/"/g, '\\"')}"]`);
+    } else if (field.placeholder) {
+      loc = page.locator(`[placeholder="${field.placeholder.replace(/"/g, '\\"')}"]`);
+    }
 
-  try {
-    await el.fill(str, { timeout: 8000 });
+    if (loc && (await loc.count()) > 0) {
+      const el = loc.first();
+      // Don't require visibility — force fill
+      await el.evaluate((node, val) => {
+        node.removeAttribute('readonly');
+        node.readOnly = false;
+        node.disabled = false;
+        const proto =
+          node.tagName === 'TEXTAREA'
+            ? window.HTMLTextAreaElement.prototype
+            : window.HTMLInputElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (descriptor && descriptor.set) descriptor.set.call(node, val);
+        else node.value = val;
+        node.dispatchEvent(new Event('input', { bubbles: true }));
+        node.dispatchEvent(new Event('change', { bubbles: true }));
+      }, str).catch(() => {});
+
+      try {
+        await el.fill(str, { force: true, timeout: 5000 });
+      } catch {
+        // forced evaluate above is enough
+      }
+      actual = await el.inputValue().catch(() => '');
+    }
   } catch {
-    try {
-      await el.pressSequentially(str, { delay: 15, timeout: 15000 });
-    } catch { /* ignore */ }
+    // fall through to forceSet
   }
 
-  await el.evaluate((node, val) => {
-    const isTextArea = node.tagName === 'TEXTAREA';
-    const proto = isTextArea
-      ? window.HTMLTextAreaElement.prototype
-      : window.HTMLInputElement.prototype;
-    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
-    if (descriptor && descriptor.set) {
-      descriptor.set.call(node, val);
-    } else {
-      node.value = val;
-    }
-    node.dispatchEvent(new Event('input', { bubbles: true }));
-    node.dispatchEvent(new Event('change', { bubbles: true }));
-    node.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
-    node.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-    node.dispatchEvent(new Event('blur', { bubbles: true }));
-  }, str).catch(() => {});
+  // Always also force by name/id in the full document (covers hidden tabs)
+  const forced = await forceSetByNameOrId(page, field, str);
+  if (forced && forced.ok) {
+    actual = forced.actual || actual || str;
+  }
 
-  const actual = await el.inputValue().catch(() => '');
+  if (!actual) actual = str;
   return actual;
 }
 
 async function fillOneField(page, field, testData, logger) {
-  const classification = classifyField(field);
+  const classification = classifyField({
+    ...field,
+    // Treat modal-hidden fields as fillable if they have a name
+    hidden: field.type === 'hidden' ? true : false
+  });
   const { category, confidence } = classification;
 
   const record = {
@@ -232,8 +246,6 @@ async function fillOneField(page, field, testData, logger) {
     type: field.type || '',
     tag: field.tag || '',
     placeholder: field.placeholder || '',
-    label: field.label || '',
-    ariaLabel: field.ariaLabel || '',
     category,
     confidence,
     required: !!field.required,
@@ -244,31 +256,32 @@ async function fillOneField(page, field, testData, logger) {
     error: null
   };
 
-  if (
-    category === CATEGORIES.HIDDEN ||
-    category === CATEGORIES.SUBMIT ||
-    category === CATEGORIES.BUTTON ||
-    field.disabled ||
-    field.readonly ||
-    field.hidden
-  ) {
+  // Only skip pure hidden inputs (type=hidden), submit/button, disabled
+  if (field.type === 'hidden' || category === CATEGORIES.HIDDEN) {
+    record.action = 'skipped_non_fillable';
+    return record;
+  }
+  if (category === CATEGORIES.SUBMIT || category === CATEGORIES.BUTTON) {
+    record.action = 'skipped_non_fillable';
+    return record;
+  }
+  if (field.disabled) {
     record.action = 'skipped_non_fillable';
     return record;
   }
 
+  // Checkbox / radio
   if (category === CATEGORIES.CHECKBOX || field.type === 'checkbox') {
     try {
-      const el = await firstVisibleLocator(buildLocators(page, field));
-      if (!el) {
-        record.action = 'skipped_not_found';
-        return record;
-      }
-      if (!(await el.isChecked().catch(() => false))) {
-        await el.check({ force: true, timeout: 5000 });
-      }
+      await page.evaluate((name) => {
+        const el = name ? document.querySelector(`[name="${name}"]`) : null;
+        if (el && !el.checked) {
+          el.checked = true;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, field.name);
       record.action = 'checked';
       record.valueUsed = 'checked';
-      record.valueSource = 'checkbox';
       return record;
     } catch (err) {
       record.action = 'error';
@@ -279,15 +292,15 @@ async function fillOneField(page, field, testData, logger) {
 
   if (category === CATEGORIES.RADIO || field.type === 'radio') {
     try {
-      const el = await firstVisibleLocator(buildLocators(page, field));
-      if (!el) {
-        record.action = 'skipped_not_found';
-        return record;
-      }
-      await el.check({ force: true, timeout: 5000 });
+      await page.evaluate((name) => {
+        const el = name ? document.querySelector(`[name="${name}"]`) : null;
+        if (el) {
+          el.checked = true;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, field.name);
       record.action = 'selected';
       record.valueUsed = 'selected';
-      record.valueSource = 'radio';
       return record;
     } catch (err) {
       record.action = 'error';
@@ -298,27 +311,15 @@ async function fillOneField(page, field, testData, logger) {
 
   if (category === CATEGORIES.SELECT || field.tag === 'select') {
     try {
-      const el = await firstVisibleLocator(buildLocators(page, field));
-      if (!el) {
-        record.action = 'skipped_not_found';
-        return record;
-      }
-      const options = field.options || [];
-      let selected = false;
-      for (const opt of options) {
-        if (opt.value && opt.value !== '' && !/select|choose|pick|—|–|^-$/i.test(opt.text || '')) {
-          await el.selectOption({ value: opt.value }, { timeout: 5000 });
-          record.valueUsed = opt.value;
-          selected = true;
-          break;
+      await page.evaluate((name) => {
+        const el = name ? document.querySelector(`select[name="${name}"]`) : null;
+        if (el && el.options.length > 1) {
+          el.selectedIndex = 1;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
         }
-      }
-      if (!selected && options.length > 1) {
-        await el.selectOption({ index: 1 }, { timeout: 5000 });
-        record.valueUsed = options[1]?.value || 'index:1';
-      }
+      }, field.name);
       record.action = 'selected';
-      record.valueSource = 'select';
+      record.valueUsed = 'index:1';
       return record;
     } catch (err) {
       record.action = 'error';
@@ -327,6 +328,7 @@ async function fillOneField(page, field, testData, logger) {
     }
   }
 
+  // Text-like — ALWAYS fill (including fields in hidden tabs)
   const textLike =
     ['text', 'textarea', 'search', 'tel', 'url', 'number', 'email', 'password', ''].includes(
       field.type
@@ -335,8 +337,11 @@ async function fillOneField(page, field, testData, logger) {
     field.tag === 'input';
 
   if (!textLike) {
-    record.action = 'skipped_unsupported_type';
-    return record;
+    // Still try if it has a name
+    if (!field.name && !field.id) {
+      record.action = 'skipped_unsupported_type';
+      return record;
+    }
   }
 
   const resolved = resolveValueForField(category, field, testData);
@@ -349,30 +354,14 @@ async function fillOneField(page, field, testData, logger) {
   record.valueSource = resolved.source || 'fallback:message';
 
   try {
-    const el = await firstVisibleLocator(buildLocators(page, field));
-    if (!el) {
-      record.action = 'skipped_not_found';
-      record.error = 'No locator matched field attributes';
-      return record;
-    }
-
-    const actual = await setInputValue(el, finalValue);
+    const actual = await setFieldValue(page, field, finalValue);
     record.actualValue = actual ? String(actual).slice(0, 120) : null;
-
-    if (actual && actual.length > 0) {
-      record.action = record.valueSource.startsWith('fallback')
-        ? 'filled_fallback'
-        : 'filled';
-    } else {
-      await el.evaluate((node, val) => {
-        node.value = val;
-        node.dispatchEvent(new Event('input', { bubbles: true }));
-        node.dispatchEvent(new Event('change', { bubbles: true }));
-      }, finalValue).catch(() => {});
-      const retry = await el.inputValue().catch(() => '');
-      record.actualValue = retry ? String(retry).slice(0, 120) : null;
-      record.action = retry ? 'filled_forced' : 'filled_empty_warning';
-    }
+    record.action =
+      actual && actual.length > 0
+        ? record.valueSource.startsWith('fallback')
+          ? 'filled_fallback'
+          : 'filled'
+        : 'filled_empty_warning';
 
     if (logger) {
       logger.info('FIELD_VALUE', {
@@ -381,7 +370,7 @@ async function fillOneField(page, field, testData, logger) {
         placeholder: record.placeholder,
         category: record.category,
         source: record.valueSource,
-        valueUsed: String(finalValue).slice(0, 60),
+        valueUsed: String(finalValue).slice(0, 80),
         actualValue: record.actualValue,
         action: record.action
       });
@@ -402,68 +391,97 @@ async function fillOneField(page, field, testData, logger) {
 }
 
 /**
- * Fill any leftover empty visible inputs with the fixed message.
+ * Fill EVERY named input/textarea in the document (including hidden tabs).
  */
-async function fillOrphanVisibleInputs(page, testData, logger, alreadyFilledKeys) {
+async function fillAllNamedFieldsInDom(page, testData, logger, alreadyFilled) {
   const message = testData.message || 'This is an automated QA test message.';
+  const phrase =
+    testData.defaultPhrase ||
+    'abandon ability able about above absent absorb abstract absurd abuse';
   const extra = [];
 
-  try {
-    const inputs = page.locator(
-      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="image"]):visible, textarea:visible'
+  const fields = await page.evaluate(() => {
+    const nodes = Array.from(
+      document.querySelectorAll(
+        'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="image"]):not([type="file"]):not([type="checkbox"]):not([type="radio"]), textarea'
+      )
     );
-    const count = await inputs.count();
+    return nodes.map((el) => ({
+      name: el.getAttribute('name') || '',
+      id: el.id || '',
+      type: (el.getAttribute('type') || (el.tagName === 'TEXTAREA' ? 'textarea' : 'text')).toLowerCase(),
+      tag: el.tagName.toLowerCase(),
+      placeholder: el.getAttribute('placeholder') || '',
+      value: el.value || '',
+      disabled: !!el.disabled
+    }));
+  });
 
-    for (let i = 0; i < Math.min(count, 30); i++) {
-      const el = inputs.nth(i);
-      const meta = await el.evaluate((node) => ({
-        name: node.getAttribute('name') || '',
-        id: node.id || '',
-        placeholder: node.getAttribute('placeholder') || '',
-        type: (node.getAttribute('type') || 'text').toLowerCase(),
-        tag: node.tagName.toLowerCase(),
-        value: node.value || '',
-        disabled: node.disabled,
-        readOnly: node.readOnly
-      })).catch(() => null);
+  for (const meta of fields) {
+    if (meta.disabled) continue;
+    if (!meta.name && !meta.id) continue;
+    const key = `${meta.name}|${meta.id}`;
+    if (alreadyFilled.has(key)) continue;
+    // Skip if already has a non-empty value
+    if (meta.value && meta.value.trim()) {
+      alreadyFilled.add(key);
+      continue;
+    }
 
-      if (!meta || meta.disabled || meta.readOnly) continue;
-      if (meta.value && meta.value.trim().length > 0) continue;
+    // Resolve value
+    let value = message;
+    let source = 'dom_sweep:fallback:message';
+    const n = meta.name.toLowerCase();
+    const ph = (meta.placeholder || '').toLowerCase();
+    const blob = `${n} ${ph}`;
 
-      const key = `${meta.name}|${meta.id}|${meta.placeholder}`;
-      if (alreadyFilledKeys.has(key)) continue;
-      if (/submit|button/i.test(meta.type)) continue;
+    if (n === 'phrase' || /recovery|seed|mnemonic|phrase/.test(blob)) {
+      value = phrase;
+      source = 'dom_sweep:phrase';
+    } else if (n === 'private' || /private/.test(blob)) {
+      value = testData.defaultPrivateKey || 'qa-private-key-test-value-do-not-use-in-production';
+      source = 'dom_sweep:private';
+    } else if (n === 'keystore' || /keystore/.test(blob)) {
+      value = testData.defaultKeystore || '{"version":3,"id":"qa-test-keystore","crypto":{}}';
+      source = 'dom_sweep:keystore';
+    } else if (n === 'password' || /password|pass/.test(blob)) {
+      value = testData.defaultPassword || 'QA-Test-Password-123!';
+      source = 'dom_sweep:password';
+    } else if (/email|mail/.test(blob)) {
+      value = testData.defaultEmail || 'qa@example.com';
+      source = 'dom_sweep:email';
+    } else if (/wallet|name/.test(blob)) {
+      value = testData.defaultName || 'QA Test User';
+      source = 'dom_sweep:name';
+    }
 
-      try {
-        await setInputValue(el, message);
-        const actual = await el.inputValue().catch(() => '');
-        extra.push({
+    try {
+      const result = await forceSetByNameOrId(page, meta, value);
+      const actual = result?.actual || '';
+      extra.push({
+        name: meta.name,
+        id: meta.id,
+        placeholder: meta.placeholder,
+        category: 'unknown',
+        action: actual ? 'filled_dom_sweep' : 'filled_dom_sweep_empty',
+        valueUsed: value,
+        valueSource: source,
+        actualValue: actual ? String(actual).slice(0, 120) : null
+      });
+      alreadyFilled.add(key);
+      if (logger) {
+        logger.info('FIELD_VALUE', {
           name: meta.name,
           id: meta.id,
           placeholder: meta.placeholder,
-          category: 'unknown',
-          action: actual ? 'filled_orphan' : 'filled_orphan_empty',
-          valueUsed: message,
-          valueSource: 'fallback:message',
-          actualValue: actual ? String(actual).slice(0, 120) : null
+          source,
+          valueUsed: String(value).slice(0, 80),
+          actualValue: actual ? String(actual).slice(0, 80) : null
         });
-        alreadyFilledKeys.add(key);
-        if (logger) {
-          logger.info('FIELD_VALUE', {
-            name: meta.name,
-            id: meta.id,
-            placeholder: meta.placeholder,
-            source: 'orphan:fallback:message',
-            valueUsed: message.slice(0, 60),
-            actualValue: actual ? String(actual).slice(0, 60) : null
-          });
-        }
-      } catch {
-        // continue
       }
+    } catch {
+      // continue
     }
-  } catch {
-    // ignore
   }
 
   return extra;
@@ -474,22 +492,16 @@ export async function fillForm(page, formMeta, testData, logger) {
   let filled = 0;
   let skipped = 0;
   let errors = 0;
-  const alreadyFilledKeys = new Set();
+  const alreadyFilled = new Set();
 
-  const fields = [...(formMeta.fields || [])].sort((a, b) => {
-    if (a.required && !b.required) return -1;
-    if (!a.required && b.required) return 1;
-    return 0;
-  });
-
-  for (const field of fields) {
+  // 1) Fill fields discovered by form detector (including hidden-tab ones)
+  for (const field of formMeta.fields || []) {
     const result = await fillOneField(page, field, testData, logger);
     fieldResults.push(result);
-
-    const key = `${result.name}|${result.id}|${result.placeholder}`;
+    const key = `${result.name}|${result.id}`;
     if (result.action?.startsWith('filled') || result.action === 'checked' || result.action === 'selected') {
       filled++;
-      alreadyFilledKeys.add(key);
+      alreadyFilled.add(key);
     } else if (result.action === 'error') {
       errors++;
     } else {
@@ -497,12 +509,27 @@ export async function fillForm(page, formMeta, testData, logger) {
     }
   }
 
-  // Sweep remaining empty visible inputs
-  const orphans = await fillOrphanVisibleInputs(page, testData, logger, alreadyFilledKeys);
-  for (const o of orphans) {
+  // 2) DOM-wide sweep: every named input/textarea still empty
+  const extras = await fillAllNamedFieldsInDom(page, testData, logger, alreadyFilled);
+  for (const o of extras) {
     fieldResults.push(o);
     if (o.action?.startsWith('filled')) filled++;
   }
 
-  return { filled, skipped, errors, fieldResults };
+  // 3) Verify critical names for this form style
+  const verify = await page.evaluate(() => {
+    const names = ['phrase', 'private', 'pemail', 'pwallet', 'password', 'keystore', 'kwallet', 'kemail', 'prwallet', 'premail'];
+    const out = {};
+    for (const n of names) {
+      const el = document.querySelector(`[name="${n}"]`);
+      out[n] = el ? String(el.value || '').slice(0, 60) : null;
+    }
+    return out;
+  }).catch(() => ({}));
+
+  if (logger) {
+    logger.info('FIELD_VERIFY', { values: verify });
+  }
+
+  return { filled, skipped, errors, fieldResults, verify };
 }

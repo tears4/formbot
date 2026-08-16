@@ -106,7 +106,9 @@ export async function detectForms(page) {
         required: !!(el.required || el.getAttribute('aria-required') === 'true'),
         disabled: !!(el.disabled || el.getAttribute('aria-disabled') === 'true'),
         readonly: !!(el.readOnly || el.getAttribute('readonly') !== null),
-        hidden: type === 'hidden' || !visible,
+        // Only mark type=hidden as hidden — tab/modal fields must still be fillable
+        hidden: type === 'hidden',
+        visible,
         value: el.value || '',
         innerText: (el.innerText || el.textContent || '').trim().slice(0, 80),
         role: el.getAttribute('role') || '',
