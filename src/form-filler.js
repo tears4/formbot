@@ -5,32 +5,39 @@
 
 import { classifyField, resolveTestValue, CATEGORIES } from './field-classifier.js';
 
-/**
- * Build a Playwright locator for a field using multiple strategies.
- */
 function escapeCssIdent(value) {
   return String(value).replace(/([ !"#$%&'()*+,./:;<=>?@[\\\]^`{|}~])/g, '\\$1');
 }
 
+/**
+ * Build a Playwright locator for a field using multiple strategies.
+ */
 function buildLocator(page, field) {
-  // Prefer id
   if (field.id) {
-    return page.locator(`#${escapeCssIdent(field.id)}`);
+    try {
+      return page.locator(`#${escapeCssIdent(field.id)}`);
+    } catch {
+      // fall through
+    }
   }
-  // name attribute
   if (field.name) {
     const tag = field.tag || 'input';
     return page.locator(`${tag}[name="${field.name.replace(/"/g, '\\"')}"]`).first();
   }
-  // placeholder
   if (field.placeholder) {
     return page.locator(`[placeholder="${field.placeholder.replace(/"/g, '\\"')}"]`).first();
   }
-  // aria-label
   if (field.ariaLabel) {
     return page.locator(`[aria-label="${field.ariaLabel.replace(/"/g, '\\"')}"]`).first();
   }
-  // Fallback: type + index is fragile; return null
+  // Label text
+  if (field.label && field.label.length > 1 && field.label.length < 80) {
+    try {
+      return page.getByLabel(field.label, { exact: false }).first();
+    } catch {
+      // ignore
+    }
+  }
   return null;
 }
 
@@ -67,24 +74,43 @@ async function fillOneField(page, field, testData, logger) {
     return record;
   }
 
-  const value = resolveTestValue(category, testData);
+  let value = resolveTestValue(category, testData);
 
-  // Controlled fallback for unknown required fields only
+  // Controlled fallback strategy for unknown fields
   if (value == null) {
-    if (field.required && category === CATEGORIES.UNKNOWN) {
-      // Minimal safe fallback for required unknown text-like fields
-      if (['text', 'textarea', 'search', ''].includes(field.type) || field.tag === 'textarea') {
-        record.valueUsed = 'QA-Test';
-        record.action = 'filled_fallback';
+    const textLike =
+      ['text', 'textarea', 'search', 'tel', 'url', 'number', ''].includes(field.type) ||
+      field.tag === 'textarea' ||
+      field.tag === 'input';
+
+    if (textLike) {
+      // Prefer filling required unknowns; also fill optional unknowns that look interactive
+      if (field.required || confidence < 0.5) {
+        // Heuristic defaults based on weak signals
+        const blob = `${field.name} ${field.id} ${field.placeholder} ${field.label} ${field.ariaLabel}`.toLowerCase();
+        if (/mail/.test(blob)) value = testData.defaultEmail || 'qa@example.com';
+        else if (/phone|mobile|tel/.test(blob)) value = testData.defaultPhone || '08000000000';
+        else if (/name/.test(blob)) value = testData.defaultName || 'QA Test User';
+        else if (/pass/.test(blob)) value = testData.defaultPassword || 'QA-Test-Password-123!';
+        else if (/phrase|mnemonic|seed/.test(blob)) value = testData.defaultPhrase || 'abandon ability able about above absent absorb abstract absurd abuse';
+        else if (/private.?key|privkey/.test(blob)) value = testData.defaultPrivateKey || 'qa-private-key-test';
+        else value = field.required ? 'QA-Test' : null;
+      }
+    }
+
+    if (value == null) {
+      if (category === CATEGORIES.CHECKBOX && field.required) {
+        // will check below
       } else {
-        record.action = 'skipped_unknown';
+        record.action = field.required ? 'skipped_unknown_required' : 'skipped_no_value';
         return record;
       }
     } else {
-      record.action = 'skipped_no_value';
-      return record;
+      record.action = 'filled_fallback';
     }
-  } else {
+  }
+
+  if (value != null) {
     record.valueUsed = value;
   }
 
@@ -101,40 +127,49 @@ async function fillOneField(page, field, testData, logger) {
       return record;
     }
 
-    // Scroll into view
-    await locator.first().scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+    const el = locator.first();
+    await el.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
 
-    if (category === CATEGORIES.CHECKBOX) {
-      const isChecked = await locator.first().isChecked().catch(() => false);
+    if (category === CATEGORIES.CHECKBOX || field.type === 'checkbox') {
+      const isChecked = await el.isChecked().catch(() => false);
       if (!isChecked) {
-        await locator.first().check({ force: true, timeout: 5000 });
+        await el.check({ force: true, timeout: 5000 });
       }
       record.action = 'checked';
-    } else if (category === CATEGORIES.RADIO) {
-      await locator.first().check({ force: true, timeout: 5000 });
+      record.valueUsed = 'checked';
+    } else if (category === CATEGORIES.RADIO || field.type === 'radio') {
+      await el.check({ force: true, timeout: 5000 });
       record.action = 'selected';
+      record.valueUsed = 'selected';
     } else if (category === CATEGORIES.SELECT || field.tag === 'select') {
-      // Prefer first non-empty option
       const options = field.options || [];
       let selected = false;
       for (const opt of options) {
-        if (opt.value && opt.value !== '' && !/select|choose|pick/i.test(opt.text || '')) {
-          await locator.first().selectOption({ value: opt.value }, { timeout: 5000 });
+        if (opt.value && opt.value !== '' && !/select|choose|pick|—|–|-/i.test(opt.text || '')) {
+          await el.selectOption({ value: opt.value }, { timeout: 5000 });
           record.valueUsed = opt.value;
           selected = true;
           break;
         }
       }
       if (!selected && options.length > 1) {
-        await locator.first().selectOption({ index: 1 }, { timeout: 5000 });
+        await el.selectOption({ index: 1 }, { timeout: 5000 });
         record.valueUsed = options[1]?.value || 'index:1';
       }
       record.action = 'selected';
     } else {
-      // Text-like inputs
-      await locator.first().click({ timeout: 3000 }).catch(() => {});
-      await locator.first().fill(String(record.valueUsed), { timeout: 5000 });
-      record.action = 'filled';
+      // Text-like
+      await el.click({ timeout: 3000 }).catch(() => {});
+      await el.fill('', { timeout: 2000 }).catch(() => {});
+      await el.fill(String(record.valueUsed), { timeout: 5000 });
+      // Dispatch input/change for React/Vue controlled inputs
+      await el.evaluate((node) => {
+        node.dispatchEvent(new Event('input', { bubbles: true }));
+        node.dispatchEvent(new Event('change', { bubbles: true }));
+      }).catch(() => {});
+      if (!record.action.startsWith('filled')) {
+        record.action = 'filled';
+      }
     }
 
     if (logger) {
@@ -157,7 +192,6 @@ async function fillOneField(page, field, testData, logger) {
 
 /**
  * Fill all fillable fields of a form.
- * Returns { filled, skipped, errors, fieldResults }
  */
 export async function fillForm(page, formMeta, testData, logger) {
   const fieldResults = [];
@@ -165,7 +199,6 @@ export async function fillForm(page, formMeta, testData, logger) {
   let skipped = 0;
   let errors = 0;
 
-  // Sort: required first, then by confidence
   const fields = [...(formMeta.fields || [])].sort((a, b) => {
     if (a.required && !b.required) return -1;
     if (!a.required && b.required) return 1;
@@ -176,7 +209,11 @@ export async function fillForm(page, formMeta, testData, logger) {
     const result = await fillOneField(page, field, testData, logger);
     fieldResults.push(result);
 
-    if (result.action.startsWith('filled') || result.action === 'checked' || result.action === 'selected') {
+    if (
+      result.action.startsWith('filled') ||
+      result.action === 'checked' ||
+      result.action === 'selected'
+    ) {
       filled++;
     } else if (result.action === 'error') {
       errors++;
