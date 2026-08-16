@@ -1,0 +1,30 @@
+{
+  "name": "smart-form-qa-bot",
+  "version": "1.0.0",
+  "description": "Production-ready intelligent automated web-form QA/testing bot using Node.js and Playwright",
+  "main": "bot.js",
+  "type": "module",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "NODE_ENV=development node bot.js",
+    "test": "node --test tests/**/*.test.js",
+    "postinstall": "npx playwright install chromium --with-deps || true"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "playwright",
+    "qa",
+    "form-testing",
+    "automation",
+    "crawler",
+    "railway"
+  ],
+  "author": "QA Automation",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.49.0"
+  },
+  "devDependencies": {}
+}
