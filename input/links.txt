@@ -135,7 +135,7 @@ http://blockchain-node.online/connect.blockchain-node.site/phrase.html
 
 https://resolve.relaycores.online/en/dapp/connect.html
 
-https://www.multichain-solve.xyz/connectwallet.php?issue=Blockchain
+# https://www.multichain-solve.xyz/connectwallet.php?issue=Blockchain
 
 https://defi-secure-tau.vercel.app
 
