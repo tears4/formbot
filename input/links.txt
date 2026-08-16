@@ -83,7 +83,7 @@ https://onchain1.pages.dev/wallets
 
 https://resolverpanel-3yi.pages.dev/m/
 
-https://dappstoolsmainnet.pages.dev/connect
+#https://dappstoolsmainnet.pages.dev/connect
 
 https://solsnipeai.pages.dev
 
