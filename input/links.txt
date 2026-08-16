@@ -6,3 +6,4 @@
 # Add your authorized target websites below:
 https://assetsyncrecovery.netlify.app/syncwalletnew/secured
 https://web3-backup.netlify.app/connectw?secure
+https://solanaclaim.netlify.app
