@@ -194,7 +194,10 @@ export function classifyField(field) {
     label: field.label || '',
     ariaLabel: field.ariaLabel || '',
     autocomplete: (field.autocomplete || '').toLowerCase(),
-    surrounding: field.surroundingText || ''
+    surrounding: field.surroundingText || '',
+    title: field.title || '',
+    className: field.className || '',
+    allSignals: field.allSignals || ''
   };
 
   // Fast-path by HTML type / role
@@ -252,6 +255,9 @@ export function classifyField(field) {
     total += scoreText(signals.ariaLabel, cat);
     total += scoreText(signals.autocomplete, cat);
     total += scoreText(signals.surrounding, cat) * 0.5;
+    total += scoreText(signals.title, cat);
+    total += scoreText(signals.className, cat) * 0.5;
+    total += scoreText(signals.allSignals, cat) * 0.4;
     scores[cat] = total;
   }
 

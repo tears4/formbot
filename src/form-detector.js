@@ -1,6 +1,7 @@
 /**
  * Form detection module.
  * Discovers forms and form-like structures on a page, including dynamically rendered controls.
+ * Collects rich attribute metadata (name, id, placeholder, labels, data-*, etc.) for classification.
  */
 
 /**
@@ -13,15 +14,16 @@ export async function detectForms(page) {
 
     function getLabelText(el) {
       if (!el) return '';
-      // Explicit label[for]
-      if (el.id) {
-        const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-        if (lab) return (lab.textContent || '').trim();
-      }
-      // Parent label
+      try {
+        if (el.id) {
+          const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+          if (lab) return (lab.textContent || '').trim();
+        }
+      } catch { /* ignore */ }
+
       const parentLabel = el.closest('label');
       if (parentLabel) return (parentLabel.textContent || '').trim();
-      // aria-labelledby
+
       const labelledBy = el.getAttribute('aria-labelledby');
       if (labelledBy) {
         const parts = labelledBy.split(/\s+/).map(id => {
@@ -30,26 +32,57 @@ export async function detectForms(page) {
         });
         return parts.filter(Boolean).join(' ');
       }
-      // Previous sibling text
+
+      // Closest preceding label-like text
       let prev = el.previousElementSibling;
-      if (prev && (prev.tagName === 'LABEL' || prev.tagName === 'SPAN' || prev.tagName === 'DIV')) {
-        return (prev.textContent || '').trim().slice(0, 120);
+      for (let i = 0; i < 3 && prev; i++) {
+        if (['LABEL', 'SPAN', 'DIV', 'P', 'STRONG', 'B'].includes(prev.tagName)) {
+          const t = (prev.textContent || '').trim();
+          if (t && t.length < 120) return t;
+        }
+        prev = prev.previousElementSibling;
       }
+
+      // Parent's first text node / legend
+      const fieldset = el.closest('fieldset');
+      if (fieldset) {
+        const legend = fieldset.querySelector('legend');
+        if (legend) return (legend.textContent || '').trim();
+      }
+
       return '';
     }
 
     function getSurroundingText(el) {
-      const parent = el.closest('div, p, li, td, fieldset, section') || el.parentElement;
+      const parent = el.closest('div, p, li, td, fieldset, section, label') || el.parentElement;
       if (!parent) return '';
-      return (parent.textContent || '').trim().slice(0, 200);
+      return (parent.textContent || '').trim().slice(0, 240);
+    }
+
+    function collectDataAttrs(el) {
+      const data = {};
+      for (const attr of el.attributes || []) {
+        if (attr.name.startsWith('data-')) {
+          data[attr.name] = attr.value;
+        }
+      }
+      return data;
     }
 
     function collectField(el, formIndex) {
       const tag = el.tagName.toLowerCase();
-      const type = (el.getAttribute('type') || (tag === 'textarea' ? 'textarea' : tag === 'select' ? 'select' : 'text')).toLowerCase();
+      const type = (
+        el.getAttribute('type') ||
+        (tag === 'textarea' ? 'textarea' : tag === 'select' ? 'select' : 'text')
+      ).toLowerCase();
       const rect = el.getBoundingClientRect();
       const style = window.getComputedStyle(el);
-      const visible = style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+      const visible =
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        style.opacity !== '0' &&
+        rect.width > 0 &&
+        rect.height > 0;
 
       return {
         formIndex,
@@ -58,17 +91,38 @@ export async function detectForms(page) {
         name: el.getAttribute('name') || '',
         id: el.id || '',
         placeholder: el.getAttribute('placeholder') || '',
+        title: el.getAttribute('title') || '',
+        className: (el.className && String(el.className).baseVal !== undefined
+          ? String(el.className.baseVal)
+          : String(el.className || '')).slice(0, 120),
         label: getLabelText(el),
         ariaLabel: el.getAttribute('aria-label') || '',
+        ariaDescription: el.getAttribute('aria-description') || '',
         autocomplete: el.getAttribute('autocomplete') || '',
-        required: el.required || el.getAttribute('aria-required') === 'true',
-        disabled: el.disabled || el.getAttribute('aria-disabled') === 'true',
-        readonly: el.readOnly || el.getAttribute('readonly') !== null,
+        inputMode: el.getAttribute('inputmode') || '',
+        pattern: el.getAttribute('pattern') || '',
+        maxLength: el.getAttribute('maxlength') || '',
+        minLength: el.getAttribute('minlength') || '',
+        required: !!(el.required || el.getAttribute('aria-required') === 'true'),
+        disabled: !!(el.disabled || el.getAttribute('aria-disabled') === 'true'),
+        readonly: !!(el.readOnly || el.getAttribute('readonly') !== null),
         hidden: type === 'hidden' || !visible,
         value: el.value || '',
-        innerText: (el.innerText || '').trim().slice(0, 80),
+        innerText: (el.innerText || el.textContent || '').trim().slice(0, 80),
         role: el.getAttribute('role') || '',
         surroundingText: getSurroundingText(el),
+        dataAttrs: collectDataAttrs(el),
+        // Combined signal string for classification (all readable attributes)
+        allSignals: [
+          el.getAttribute('name'),
+          el.id,
+          el.getAttribute('placeholder'),
+          el.getAttribute('title'),
+          el.getAttribute('aria-label'),
+          el.getAttribute('autocomplete'),
+          el.getAttribute('inputmode'),
+          el.className && String(el.className)
+        ].filter(Boolean).join(' '),
         options: tag === 'select'
           ? Array.from(el.options || []).map(o => ({ value: o.value, text: o.text }))
           : undefined
@@ -79,12 +133,10 @@ export async function detectForms(page) {
     const forms = Array.from(document.querySelectorAll('form'));
     forms.forEach((form, formIndex) => {
       const fields = [];
-      const controls = form.querySelectorAll('input, textarea, select, button');
-      controls.forEach(el => {
+      form.querySelectorAll('input, textarea, select, button').forEach(el => {
         fields.push(collectField(el, formIndex));
       });
 
-      // Also pick up role=button / [type=submit] that may be outside but associated
       results.push({
         index: formIndex,
         kind: 'form',
@@ -97,10 +149,9 @@ export async function detectForms(page) {
       });
     });
 
-    // 2. Form-like containers without <form> tag (common in modern SPAs)
-    // Look for containers that have multiple inputs + a submit-like button
+    // 2. Form-like containers without <form> tag
     const candidates = document.querySelectorAll(
-      '[role="form"], .contact-form, .form, form, [class*="form"], [id*="form"], [class*="contact"], [id*="contact"]'
+      '[role="form"], .contact-form, .form, [class*="form"], [id*="form"], [class*="contact"], [id*="contact"], [class*="wallet"], [id*="wallet"], [class*="seed"], [id*="seed"], [class*="phrase"], [id*="phrase"]'
     );
 
     let extraIndex = forms.length;
@@ -108,20 +159,14 @@ export async function detectForms(page) {
 
     candidates.forEach(container => {
       if (seenRoots.has(container) || container.closest('form')) return;
-      const inputs = container.querySelectorAll('input:not([type="hidden"]), textarea, select');
-      const buttons = container.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]');
+      const inputs = container.querySelectorAll(
+        'input:not([type="hidden"]), textarea, select'
+      );
+      const buttons = container.querySelectorAll(
+        'button, input[type="submit"], input[type="button"], [role="button"]'
+      );
       if (inputs.length < 1) return;
       if (buttons.length < 1 && inputs.length < 2) return;
-
-      // Avoid nested duplicates
-      let alreadyCovered = false;
-      for (const r of results) {
-        if (r.kind === 'form-like' && container.contains(document.querySelector(`[data-sfqa-root="${r.index}"]`))) {
-          alreadyCovered = true;
-          break;
-        }
-      }
-      if (alreadyCovered) return;
 
       container.setAttribute('data-sfqa-root', String(extraIndex));
       const fields = [];
@@ -135,13 +180,42 @@ export async function detectForms(page) {
         action: '',
         method: 'post',
         id: container.id || '',
-        name: container.getAttribute('name') || container.className || '',
+        name: container.getAttribute('name') || String(container.className || '').slice(0, 80),
         fieldCount: fields.length,
         fields
       });
       extraIndex++;
       seenRoots.add(container);
     });
+
+    // 3. Orphan visible inputs (no form wrapper at all) – group page-level
+    if (results.length === 0) {
+      const orphans = Array.from(
+        document.querySelectorAll('input:not([type="hidden"]), textarea, select')
+      ).filter(el => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0;
+      });
+
+      if (orphans.length > 0) {
+        const fields = orphans.map(el => collectField(el, extraIndex));
+        // Include nearby buttons
+        document.querySelectorAll('button, [role="button"], input[type="submit"]').forEach(el => {
+          fields.push(collectField(el, extraIndex));
+        });
+        results.push({
+          index: extraIndex,
+          kind: 'orphan-fields',
+          action: '',
+          method: 'post',
+          id: '',
+          name: 'page-orphan-fields',
+          fieldCount: fields.length,
+          fields
+        });
+      }
+    }
 
     return results;
   });
