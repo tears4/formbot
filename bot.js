@@ -7,6 +7,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import http from 'http';
 import { fileURLToPath } from 'url';
 import { chromium } from 'playwright';
 
@@ -25,6 +26,35 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const ROOT = __dirname;
+
+// Status for health endpoint (Railway keeps container alive when PORT is bound)
+let botStatus = {
+  state: 'starting',
+  cycle: 0,
+  lastSummary: null,
+  startedAt: new Date().toISOString()
+};
+
+function startHealthServer() {
+  const port = parseInt(process.env.PORT || '3000', 10);
+  const server = http.createServer((req, res) => {
+    if (req.url === '/health' || req.url === '/') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, ...botStatus }));
+      return;
+    }
+    res.writeHead(404);
+    res.end('Not found');
+  });
+  server.listen(port, '0.0.0.0', () => {
+    console.log(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event: 'HEALTH_SERVER',
+      port
+    }));
+  });
+  return server;
+}
 
 // ---------------------------------------------------------------------------
 // Configuration loading with environment variable overrides
@@ -225,6 +255,9 @@ async function runBatch(settings, testData, urls, cycleNumber) {
 // ---------------------------------------------------------------------------
 
 async function main() {
+  // Bind PORT early so Railway healthchecks pass and container is not killed
+  startHealthServer();
+
   const { settings, testData } = loadConfig();
   const urls = loadTargetUrls();
 
@@ -241,14 +274,18 @@ async function main() {
     loopDelayMs: settings.loopDelayMs
   }));
 
+  botStatus.state = 'running';
   let cycle = 0;
 
   // Continuous loop (or single run if LOOP_ENABLED=false)
   // eslint-disable-next-line no-constant-condition
   while (!shuttingDown) {
     cycle += 1;
+    botStatus.cycle = cycle;
+    botStatus.state = 'running_batch';
     try {
-      await runBatch(settings, testData, urls, cycle);
+      const summary = await runBatch(settings, testData, urls, cycle);
+      botStatus.lastSummary = summary;
     } catch (err) {
       console.error(JSON.stringify({
         timestamp: new Date().toISOString(),
@@ -264,6 +301,7 @@ async function main() {
     }
 
     const delayMs = settings.loopDelayMs || 600000;
+    botStatus.state = 'waiting';
     console.log(JSON.stringify({
       timestamp: new Date().toISOString(),
       event: 'LOOP_WAIT',
@@ -281,6 +319,7 @@ async function main() {
     }
   }
 
+  botStatus.state = 'exited';
   console.log(JSON.stringify({
     timestamp: new Date().toISOString(),
     event: 'BOT_EXIT',
