@@ -1,0 +1,7 @@
+# Smart Form QA Bot - Target URLs
+# One URL per line. Lines starting with # are ignored.
+# Blank lines are ignored. Duplicates are removed automatically.
+
+https://example.com
+# https://httpbin.org/forms/post
+# Add your authorized target websites below:
