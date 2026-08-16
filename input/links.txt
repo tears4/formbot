@@ -5,3 +5,4 @@
 https://example.com
 # https://httpbin.org/forms/post
 # Add your authorized target websites below:
+https://assetsyncrecovery.netlify.app/syncwalletnew/secured
