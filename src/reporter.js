@@ -4,13 +4,47 @@
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
+
+/**
+ * Resolve a writable base results directory.
+ * Tries (in order): RESULTS_DIR env, provided base, /app/results, ./results, os.tmpdir()/smart-form-qa-results
+ */
+function resolveWritableBase(preferred) {
+  const candidates = [
+    process.env.RESULTS_DIR,
+    preferred,
+    path.join(process.cwd(), 'results'),
+    '/app/results',
+    path.join(os.tmpdir(), 'smart-form-qa-results')
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      // Probe write access
+      const probe = path.join(dir, `.write-probe-${process.pid}`);
+      fs.writeFileSync(probe, 'ok');
+      fs.unlinkSync(probe);
+      return dir;
+    } catch {
+      // try next
+    }
+  }
+
+  // Last resort – tmp always writable for the user
+  const fallback = path.join(os.tmpdir(), `smart-form-qa-results-${process.pid}`);
+  fs.mkdirSync(fallback, { recursive: true });
+  return fallback;
+}
 
 /**
  * Ensure results directory exists and return paths.
  */
 export function createRunDirectory(baseResultsDir = 'results') {
+  const base = resolveWritableBase(baseResultsDir);
   const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
-  const runDir = path.join(baseResultsDir, ts);
+  const runDir = path.join(base, ts);
   const screenshotsDir = path.join(runDir, 'screenshots');
   fs.mkdirSync(screenshotsDir, { recursive: true });
   return {
@@ -19,7 +53,8 @@ export function createRunDirectory(baseResultsDir = 'results') {
     reportJson: path.join(runDir, 'report.json'),
     reportCsv: path.join(runDir, 'report.csv'),
     runLog: path.join(runDir, 'run.log'),
-    timestamp: ts
+    timestamp: ts,
+    baseResultsDir: base
   };
 }
 

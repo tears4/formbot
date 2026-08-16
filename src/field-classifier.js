@@ -20,6 +20,10 @@ const CATEGORIES = {
   STATE: 'state',
   POSTAL_CODE: 'postal_code',
   COUNTRY: 'country',
+  PHRASE: 'phrase',
+  PHRASE_KEY: 'phrase_key',
+  PRIVATE_KEY: 'private_key',
+  PHRASE_WORD: 'phrase_word',
   CHECKBOX: 'checkbox',
   RADIO: 'radio',
   SELECT: 'select',
@@ -125,6 +129,42 @@ const SIGNAL_MAP = {
   country: [
     [/country/i, 12],
     [/nation/i, 6]
+  ],
+  // Seed phrase / recovery phrase (multi-word mnemonic)
+  phrase: [
+    [/seed[-_ ]?phrase/i, 14],
+    [/recovery[-_ ]?phrase/i, 14],
+    [/mnemonic/i, 12],
+    [/secret[-_ ]?phrase/i, 12],
+    [/backup[-_ ]?phrase/i, 12],
+    [/\bphrase\b/i, 8],
+    [/12[-_ ]?word/i, 10],
+    [/24[-_ ]?word/i, 10],
+    [/seed[-_ ]?words?/i, 11]
+  ],
+  // Phrase key / encryption key tied to a phrase
+  phrase_key: [
+    [/phrase[-_ ]?key/i, 14],
+    [/key[-_ ]?phrase/i, 12],
+    [/phrasekey/i, 12],
+    [/encryption[-_ ]?key/i, 8]
+  ],
+  // Private key (wallet / crypto style)
+  private_key: [
+    [/private[-_ ]?key/i, 14],
+    [/priv[-_ ]?key/i, 12],
+    [/secret[-_ ]?key/i, 10],
+    [/privatekey/i, 12],
+    [/privkey/i, 12],
+    [/wallet[-_ ]?key/i, 9]
+  ],
+  // Single word from a phrase / word N of seed
+  phrase_word: [
+    [/phrase[-_ ]?word/i, 14],
+    [/seed[-_ ]?word/i, 12],
+    [/word[-_ ]?\d+/i, 10],
+    [/mnemonic[-_ ]?word/i, 11],
+    [/\bword\b/i, 5]
   ]
 };
 
@@ -184,7 +224,8 @@ export function classifyField(field) {
     return { category: CATEGORIES.EMAIL, confidence: 0.98, signals };
   }
   if (signals.type === 'password' || signals.autocomplete === 'current-password' || signals.autocomplete === 'new-password') {
-    return { category: CATEGORIES.PASSWORD, confidence: 0.98, signals };
+    // Password type can still be a private key / phrase field on some wallets – score below may override if signals strong
+    // Keep password as strong default unless phrase/private_key signals dominate later
   }
   if (signals.type === 'tel' || signals.autocomplete === 'tel') {
     return { category: CATEGORIES.PHONE, confidence: 0.95, signals };
@@ -197,7 +238,8 @@ export function classifyField(field) {
   const categoriesToScore = [
     'email', 'password', 'message', 'full_name', 'first_name', 'last_name',
     'phone', 'subject', 'company', 'url', 'address', 'city', 'state',
-    'postal_code', 'country'
+    'postal_code', 'country',
+    'phrase', 'phrase_key', 'private_key', 'phrase_word'
   ];
 
   const scores = {};
@@ -211,6 +253,11 @@ export function classifyField(field) {
     total += scoreText(signals.autocomplete, cat);
     total += scoreText(signals.surrounding, cat) * 0.5;
     scores[cat] = total;
+  }
+
+  // Strong boost for password-type when no phrase/private_key signals
+  if (signals.type === 'password' || signals.autocomplete === 'current-password' || signals.autocomplete === 'new-password') {
+    scores.password = (scores.password || 0) + 20;
   }
 
   // Autocomplete strong boosts
@@ -228,9 +275,11 @@ export function classifyField(field) {
   if (ac.includes('country')) scores.country = (scores.country || 0) + 15;
   if (ac.includes('url')) scores.url = (scores.url || 0) + 12;
 
-  // Textarea bias toward message
+  // Textarea bias toward message (unless phrase signals stronger)
   if (field.tag === 'textarea') {
     scores.message = (scores.message || 0) + 8;
+    // Long mnemonic phrases often use textarea
+    if ((scores.phrase || 0) > 0) scores.phrase += 4;
   }
 
   // Pick best
@@ -276,7 +325,11 @@ export function resolveTestValue(category, testData, placeholders = {}) {
     city: testData.defaultCity || placeholders.CITY,
     state: testData.defaultState || placeholders.STATE,
     postal_code: testData.defaultPostalCode || placeholders.POSTAL_CODE,
-    country: testData.defaultCountry || placeholders.COUNTRY
+    country: testData.defaultCountry || placeholders.COUNTRY,
+    phrase: testData.defaultPhrase || placeholders.PHRASE,
+    phrase_key: testData.defaultPhraseKey || placeholders.PHRASE_KEY,
+    private_key: testData.defaultPrivateKey || placeholders.PRIVATE_KEY,
+    phrase_word: testData.defaultPhraseWord || placeholders.PHRASE_WORD
   };
 
   return map[category] ?? null;
@@ -302,7 +355,11 @@ export function expandPlaceholders(str, testData) {
     '{{CITY}}': testData.defaultCity,
     '{{STATE}}': testData.defaultState,
     '{{POSTAL_CODE}}': testData.defaultPostalCode,
-    '{{COUNTRY}}': testData.defaultCountry
+    '{{COUNTRY}}': testData.defaultCountry,
+    '{{PHRASE}}': testData.defaultPhrase,
+    '{{PHRASE_KEY}}': testData.defaultPhraseKey,
+    '{{PRIVATE_KEY}}': testData.defaultPrivateKey,
+    '{{PHRASE_WORD}}': testData.defaultPhraseWord
   };
   let out = str;
   for (const [k, v] of Object.entries(map)) {
