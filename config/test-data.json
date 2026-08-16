@@ -1,0 +1,17 @@
+{
+  "message": "This is an automated QA test message.",
+  "defaultEmail": "qa@example.com",
+  "defaultPassword": "QA-Test-Password-123!",
+  "defaultName": "QA Test User",
+  "defaultFirstName": "QA",
+  "defaultLastName": "Tester",
+  "defaultPhone": "08000000000",
+  "defaultSubject": "Automated QA Test",
+  "defaultCompany": "QA Test Company",
+  "defaultUrl": "https://example.com",
+  "defaultAddress": "1 Test Street",
+  "defaultCity": "Test City",
+  "defaultState": "Test State",
+  "defaultPostalCode": "00000",
+  "defaultCountry": "Nigeria"
+}
