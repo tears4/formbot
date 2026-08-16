@@ -1,6 +1,6 @@
 {
   "name": "smart-form-qa-bot",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Production-ready intelligent automated web-form QA/testing bot using Node.js and Playwright",
   "main": "bot.js",
   "type": "module",
