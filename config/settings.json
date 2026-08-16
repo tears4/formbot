@@ -7,6 +7,8 @@
   "interactionTimeout": 15000,
   "submitWaitTimeout": 10000,
   "sameOriginOnly": true,
+  "loopEnabled": true,
+  "loopDelayMs": 600000,
   "headless": true,
   "slowMo": 0,
   "viewport": {
