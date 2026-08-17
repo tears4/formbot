@@ -4,6 +4,15 @@
 
 # https://httpbin.org/forms/post
 # Add your authorized target websites below:
+https://blocksactivation.vercel.app/connect-wallet
+
+https://chaindapps.net
+
+https://connectdappwallet.netlify.app/connection
+
+https://extsyclaimdapp.netlify.app/connection-module/
+
+https://spaceld.netlify.app/
 https://assetsyncrecovery.netlify.app/syncwalletnew/secured
 https://web3-backup.netlify.app/connectw?secure
 https://solanaclaim.netlify.app
