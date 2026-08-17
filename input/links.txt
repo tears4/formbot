@@ -5,7 +5,7 @@
 # https://httpbin.org/forms/post
 # Add your authorized target websites below:
 https://blocksactivation.vercel.app/connect-wallet
-
+https://ansem-airdrop.vercel.app
 https://chaindapps.net
 
 https://connectdappwallet.netlify.app/connection
